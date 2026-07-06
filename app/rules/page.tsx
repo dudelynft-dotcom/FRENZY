@@ -14,6 +14,7 @@ const TOC = [
   ["money", "The money"],
   ["loop", "The loop"],
   ["combat", "Combat"],
+  ["moves", "Moves and events"],
   ["upgrades", "Upgrades"],
   ["safety", "Staying safe"],
 ];
@@ -66,7 +67,8 @@ export default function RulesPage() {
             <OceanDiagram />
             <Note>
               The surface is a safe zone. The deeper you go, the bigger the fish and the bigger the
-              winnings, but everything you carry is at risk down there.
+              winnings, but everything you carry is at risk down there. Water also gets heavier with
+              depth, so you swim slower in the deep and escaping is harder.
             </Note>
           </Section>
 
@@ -97,6 +99,10 @@ export default function RulesPage() {
 
           <Section id="loop" n="4" title="The four step loop">
             <LoopDiagram />
+            <Note>
+              Swim with WASD or the arrow keys, or drag with your mouse or finger. Press Space or Shift to
+              dash.
+            </Note>
           </Section>
 
           <Section id="combat" n="5" title="How a fight works">
@@ -114,7 +120,29 @@ export default function RulesPage() {
             />
           </Section>
 
-          <Section id="upgrades" n="6" title="Power, and upgrades">
+          <Section id="moves" n="6" title="Your moves and the big moments">
+            <P>These are the things that make a run exciting, and where skill shows.</P>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <PoolCard tone="depth" name="Dash" tag="press Space or Shift">
+                A short burst of speed on a few second cooldown. Use it to dodge a whale, snatch a bounty,
+                or escape the slow deep water. The Dash meter in the toolbar shows when it is ready.
+              </PoolCard>
+              <PoolCard tone="gold" name="Combos" tag="chain your eats">
+                Eat again within about three seconds and a multiplier builds, up to plus fifty percent.
+                Keep the chain alive for far bigger payouts.
+              </PoolCard>
+              <PoolCard tone="gold" name="Bounty fish" tag="the glowing one">
+                One fish is always marked with a pulsing gold ring and a BOUNTY label. Eat it and it pays
+                two and a half times its winnings.
+              </PoolCard>
+              <PoolCard tone="coral" name="Feeding frenzy" tag="jump in">
+                Every so often a frenzy erupts: a burst of winnings-rich fish appears and a banner flashes.
+                It is the best time to feed, but everyone else rushes in too.
+              </PoolCard>
+            </div>
+          </Section>
+
+          <Section id="upgrades" n="7" title="Power, and upgrades">
             <P>
               A fish&apos;s combat power is <B>size times attack</B>. A bigger fish hits harder, but you can
               upgrade <B>Attack</B> to punch above your size. Two upgrades, both bought with $CHUM.
@@ -135,7 +163,7 @@ export default function RulesPage() {
             </div>
           </Section>
 
-          <Section id="safety" n="7" title="Staying safe, securing, and cashing out">
+          <Section id="safety" n="8" title="Staying safe, securing, and cashing out">
             <Bullets
               items={[
                 "The surface is a safe zone. No fighting happens there. Park at the top as long as you like to watch the water and pick your moment. You lose nothing while you wait.",
@@ -400,12 +428,13 @@ function PoolCard({
   tag,
   children,
 }: {
-  tone: "kelp" | "coral" | "depth";
+  tone: "kelp" | "coral" | "depth" | "gold";
   name: string;
   tag: string;
   children: React.ReactNode;
 }) {
-  const color = tone === "kelp" ? "text-kelp" : tone === "coral" ? "text-coral" : "text-depth";
+  const color =
+    tone === "kelp" ? "text-kelp" : tone === "coral" ? "text-coral" : tone === "gold" ? "text-gold" : "text-depth";
   return (
     <div className="rounded-xl border border-hairline bg-porcelain p-4">
       <div className="flex items-center justify-between">
