@@ -1,0 +1,53 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --porcelain: #f7f8f6;
+  --ink: #10222e;
+  --tide: #5a6b75;
+  --hairline: #e3e7e4;
+  --depth: #0e4da4;
+  --kelp: #1e6b4f;
+  --coral: #c2452d;
+  --gold: #8a6d2f;
+  --shadow-float: 0 8px 30px rgb(16 34 46 / 0.08);
+}
+
+html {
+  height: 100%;
+}
+
+body {
+  @apply bg-porcelain font-sans text-base text-ink antialiased;
+  min-height: 100%;
+}
+
+::selection {
+  background: var(--depth);
+  color: #ffffff;
+}
+
+/* Visible keyboard focus everywhere. Components that draw their own
+   focus ring opt out with `focus-visible:outline-none`. */
+:focus-visible {
+  outline: 2px solid var(--depth);
+  outline-offset: 2px;
+}
+
+/* Money never wraps mid-number. */
+.ff-money {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
