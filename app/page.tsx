@@ -198,9 +198,10 @@ function Token() {
         <div className="flex flex-col gap-5">
           <h2 className="font-display text-3xl tracking-tight text-ink sm:text-4xl">$CHUM has a mouth.</h2>
           <p className="text-[15px] leading-relaxed text-tide">
-            $CHUM is the blood in the water. Buy it on a simple bonding curve, stake it in your fish, win
-            it from others, and burn it to grow stronger. Every upgrade spends $CHUM: ninety percent is
-            burned forever, and ten percent funds the weekly leaderboard, paid to the top fish.
+            $CHUM is the blood in the water. Buy it on a simple bonding curve with no trading fees, stake
+            it in your fish, win it from others, and burn it to grow stronger. Buy only until 60% is sold
+            out, then selling opens. The prize pool is funded by cosmetics, tournaments, and a reserve, so
+            rewards never come from anyone&apos;s deposit.
           </p>
           <div className="flex flex-wrap gap-3">
             <Link
@@ -222,8 +223,9 @@ function Token() {
           <TokenRow label="Total supply" value="10,000,000,000" />
           <TokenRow label="Starting FDV" value="$100,000" />
           <TokenRow label="Curve" value="+0.05% per $1,000 bought" />
+          <TokenRow label="Trading fees" value="None" />
+          <TokenRow label="Selling unlocks at" value="60% sold out" />
           <TokenRow label="Every upgrade burned" value="90%" tone="coral" />
-          <TokenRow label="To the weekly leaderboard" value="10%" tone="gold" />
         </div>
       </div>
     </section>

@@ -28,6 +28,11 @@ const EMPTY_HUD: Hud = {
   message: "",
   fishAlive: 0,
   threat: { zone: "none", label: "", targetTier: "" },
+  combo: 0,
+  dashReady: 1,
+  frenzy: false,
+  frenzyBanner: false,
+  muted: false,
 };
 
 const money = (n: number) =>
@@ -40,6 +45,7 @@ export function FishArena() {
   const [hud, setHud] = useState<Hud>(EMPTY_HUD);
   const [started, setStarted] = useState(false);
   const [fs, setFs] = useState(false);
+  const [muted, setMuted] = useState(false);
 
   const toggleFullscreen = () => {
     const el = containerRef.current;
@@ -80,13 +86,16 @@ export function FishArena() {
     // ---- Keyboard ----
     const keys = (e: KeyboardEvent, down: boolean) => {
       const k = e.key.toLowerCase();
+      if (down) game.ensureAudio();
       const i = game.input;
       let hit = true;
       if (k === "w" || k === "arrowup") i.up = down;
       else if (k === "s" || k === "arrowdown") i.down = down;
       else if (k === "a" || k === "arrowleft") i.left = down;
       else if (k === "d" || k === "arrowright") i.right = down;
-      else hit = false;
+      else if (k === " " || k === "shift") {
+        if (down) game.dash();
+      } else hit = false;
       if (hit) e.preventDefault();
     };
     const kd = (e: KeyboardEvent) => keys(e, true);
@@ -103,6 +112,7 @@ export function FishArena() {
       game.input.pointerY = w.y;
     };
     const pd = (e: PointerEvent) => {
+      game.ensureAudio();
       canvas.setPointerCapture?.(e.pointerId);
       setPointer(e.clientX, e.clientY, true);
     };
@@ -181,6 +191,12 @@ export function FishArena() {
             </span>
           )}
           <HpBar hp={hud.hp} />
+          <DashPill ready={hud.dashReady} />
+          {hud.combo > 1 && (
+            <span className="rounded-full border border-gold/50 px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wide text-gold">
+              x{hud.combo} combo
+            </span>
+          )}
         </div>
 
         <div className="ml-auto flex flex-wrap items-center gap-2">
@@ -213,6 +229,17 @@ export function FishArena() {
           )}
           <button
             type="button"
+            onClick={() => {
+              gameRef.current?.ensureAudio();
+              setMuted(gameRef.current?.toggleMute() ?? false);
+            }}
+            className="rounded-md border border-hairline px-2.5 py-1 font-mono text-[11px] text-ink outline-none transition-colors hover:bg-porcelain-deep focus-visible:ring-2 focus-visible:ring-depth"
+            aria-label={muted ? "Unmute" : "Mute"}
+          >
+            {muted ? "Sound off" : "Sound on"}
+          </button>
+          <button
+            type="button"
             onClick={toggleFullscreen}
             className="rounded-md border border-hairline px-2.5 py-1 font-mono text-[11px] text-ink outline-none transition-colors hover:bg-porcelain-deep focus-visible:ring-2 focus-visible:ring-depth"
             aria-label={fs ? "Exit fullscreen" : "Enter fullscreen"}
@@ -230,12 +257,25 @@ export function FishArena() {
           aria-label="Feeding Frenzy swimming arena"
         />
 
+        {hud.frenzyBanner && (
+          <div className="pointer-events-none absolute inset-x-0 top-8 flex flex-col items-center">
+            <div className="font-display text-3xl font-semibold uppercase tracking-[0.2em] text-gold drop-shadow-[0_2px_10px_rgba(0,0,0,0.5)]">
+              Feeding Frenzy
+            </div>
+            <div className="mt-1 font-mono text-xs text-porcelain/80">Winnings everywhere. Dive in.</div>
+          </div>
+        )}
+        {hud.frenzy && !hud.frenzyBanner && (
+          <div className="pointer-events-none absolute right-3 top-3 rounded-full border border-gold/50 bg-ink/70 px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-gold">
+            Frenzy on
+          </div>
+        )}
       </div>
 
       {/* Bottom strip - controls + latest event, also outside the river */}
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t border-hairline bg-porcelain px-3 py-2">
         <span className="font-mono text-[11px] text-tide">
-          {started ? "Swim: WASD / drag · bite fish for CHUM · deposit is always safe · surface is safe, Secure your winnings there" : "loading…"}
+          {started ? "Swim WASD or drag · Space to dash · bite fish for CHUM · chain eats for combos · surface is safe, Secure there" : "loading…"}
         </span>
         <div className="flex items-center gap-3">
           {hud.message && <span className="font-mono text-[11px] text-ink">{hud.message}</span>}
@@ -270,6 +310,26 @@ function ThreatChip({
       <span className={cn("h-1.5 w-1.5 rounded-full", s.dot)} aria-hidden />
       <span className={cn("font-mono text-[11px]", s.text)}>
         {tier}: {label}
+      </span>
+    </span>
+  );
+}
+
+function DashPill({ ready }: { ready: number }) {
+  const isReady = ready >= 0.999;
+  return (
+    <span
+      className="inline-flex items-center gap-1.5"
+      title="Press Space or Shift to dash. Recharges over a few seconds."
+    >
+      <span className={cn("font-mono text-[10px] uppercase tracking-wide", isReady ? "text-depth" : "text-tide")}>
+        Dash
+      </span>
+      <span className="h-1.5 w-10 overflow-hidden rounded-full bg-hairline">
+        <span
+          className={cn("block h-full rounded-full", isReady ? "bg-depth" : "bg-tide/60")}
+          style={{ width: `${Math.round(clampPct(ready) * 100)}%` }}
+        />
       </span>
     </span>
   );

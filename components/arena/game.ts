@@ -14,6 +14,8 @@
  * surface and bank them. Get eaten and you drop only the carried winnings.
  */
 
+import { Sound } from "./sound";
+
 export type ThreatZone = "danger" | "payday" | "clear" | "none";
 
 export type Hud = {
@@ -39,6 +41,11 @@ export type Hud = {
   message: string;
   fishAlive: number;
   threat: { zone: ThreatZone; label: string; targetTier: string };
+  combo: number; // current eat chain (0 when not active)
+  dashReady: number; // 0..1, dash cooldown progress (1 = ready)
+  frenzy: boolean; // a feeding frenzy is active
+  frenzyBanner: boolean; // show the frenzy banner
+  muted: boolean;
 };
 
 type Fish = {
@@ -156,11 +163,17 @@ const clamp = (n: number, lo: number, hi: number) => (n < lo ? lo : n > hi ? hi 
 const MAX_HP = 100;
 const BLEED_DPS = 11; // base damage/sec at even power → ~9s to drain
 const HP_REGEN = 12; // HP/sec recovered when not losing a duel
-const TAKEDOWN_LOSS = 0.1; // fraction of (carried+banked) taken on a takedown
 const TAKEDOWN_IMMUNITY = 2.5; // seconds of safety after being taken down
 const WITHDRAW_RESET = 20; // CHUM the fish keeps after you cash out (a Spawn seed)
 const SAFE_BAND = 50; // world px below the surface line that counts as the safe zone
 const BITE_RATE = 0.05; // base fraction of the victim's stake bitten per second (even power)
+
+// Feel / skill tuning.
+const DASH_COOLDOWN = 3.2; // seconds between dashes
+const DASH_TIME = 0.18; // dash duration
+const DASH_SPEED = 2.6; // speed multiplier while dashing
+const COMBO_WINDOW = 3; // seconds to chain the next eat
+const BOUNTY_BONUS = 2.5; // a bounty fish pays this multiple of its winnings
 
 // $CHUM upgrade economy (mock). Each level costs more; 90% burned, 10% to the weekly pool.
 const UPGRADE_BASE_COST = 100;
@@ -194,6 +207,27 @@ export class ArenaGame {
   private rngState = 0x1a2b3c4d;
   private t = 0; // global time (s) for ambient water motion
   private bubbles: { x: number; y: number; r: number; sp: number; phase: number }[] = [];
+  // Ambient life and scenery (decor only, no combat).
+  private seabedY = 0;
+  private seaweed: { x: number; h: number; phase: number; blades: number; hue: number }[] = [];
+  private snails: { x: number; dir: number }[] = [];
+  private critters: { kind: "turtle" | "octopus"; x: number; y: number; vx: number; phase: number }[] = [];
+
+  // Juice, skill, and events.
+  private sound = new Sound();
+  private particles: { x: number; y: number; vx: number; vy: number; life: number; max: number; color: string; size: number }[] = [];
+  private floaters: { x: number; y: number; life: number; text: string; color: string; big: boolean }[] = [];
+  private shake = 0;
+  private combo = 0;
+  private comboTimer = 0;
+  private dashCd = 0;
+  private dashTime = 0;
+  private frenzyTimer = 35; // seconds to the next feeding frenzy
+  private frenzyActive = 0; // remaining frenzy time
+  private frenzyBannerT = 0; // banner flash
+  private bountyFish: Fish | null = null;
+  private bountyTimer = 9;
+  private biteFxCd = 0;
 
   private fish: Fish[] = [];
   private player!: Fish;
@@ -234,7 +268,7 @@ export class ArenaGame {
     this.ctx = ctx;
     this.resize();
     this.spawnPlayer();
-    for (let i = 0; i < 26; i++) this.spawnFish();
+    for (let i = 0; i < 34; i++) this.spawnFish();
     for (let i = 0; i < 46; i++) {
       this.bubbles.push({
         x: this.rnd() * this.W,
@@ -244,6 +278,21 @@ export class ArenaGame {
         phase: this.rnd() * 6.28,
       });
     }
+    // Scenery on and near the seabed.
+    this.seabedY = this.worldH - 24;
+    for (let i = 0; i < 16; i++) {
+      this.seaweed.push({
+        x: this.rnd() * this.W,
+        h: 44 + this.rnd() * 96,
+        phase: this.rnd() * 6.28,
+        blades: 2 + Math.floor(this.rnd() * 3),
+        hue: this.rnd(),
+      });
+    }
+    for (let i = 0; i < 7; i++) this.snails.push({ x: this.rnd() * this.W, dir: this.rnd() < 0.5 ? -1 : 1 });
+    this.critters.push({ kind: "turtle", x: this.rnd() * this.W, y: this.worldH * 0.56, vx: 20, phase: 0 });
+    this.critters.push({ kind: "octopus", x: this.W * 0.72, y: this.seabedY - 12, vx: 0, phase: 0 });
+    this.critters.push({ kind: "octopus", x: this.W * 0.2, y: this.seabedY - 12, vx: 0, phase: 3 });
   }
 
   // Deterministic-ish RNG (varies by call; fine for a client game).
@@ -366,8 +415,79 @@ export class ArenaGame {
     if (this.raf) cancelAnimationFrame(this.raf);
   }
 
-  private mouthOf(f: Fish): { x: number; y: number } {
-    return { x: f.x + Math.cos(f.angle) * f.radius, y: f.y + Math.sin(f.angle) * f.radius };
+  // --- called from the React wrapper on user gestures ---
+  ensureAudio() {
+    this.sound.ensure();
+  }
+  toggleMute(): boolean {
+    this.sound.muted = !this.sound.muted;
+    return this.sound.muted;
+  }
+  isMuted(): boolean {
+    return this.sound.muted;
+  }
+
+  /** Short burst of speed in the current direction, on a cooldown. The skill move. */
+  dash() {
+    if (this.player.dead || this.dashCd > 0) return;
+    this.dashCd = DASH_COOLDOWN;
+    this.dashTime = DASH_TIME;
+    this.sound.dash();
+    const p = this.player;
+    const ang = Math.atan2(p.vy, p.vx);
+    for (let i = 0; i < 10; i++) {
+      this.particles.push({
+        x: p.x,
+        y: p.y,
+        vx: -Math.cos(ang) * (40 + this.rnd() * 60) + (this.rnd() - 0.5) * 40,
+        vy: -Math.sin(ang) * (40 + this.rnd() * 60) + (this.rnd() - 0.5) * 40,
+        life: 0.4,
+        max: 0.4,
+        color: "rgba(226,244,245,0.85)",
+        size: 2,
+      });
+    }
+  }
+
+  private spawnBurst(x: number, y: number, n: number, color: string, power = 1) {
+    for (let i = 0; i < n; i++) {
+      const a = this.rnd() * Math.PI * 2;
+      const sp = (30 + this.rnd() * 90) * power;
+      this.particles.push({
+        x,
+        y,
+        vx: Math.cos(a) * sp,
+        vy: Math.sin(a) * sp - 20,
+        life: 0.5 + this.rnd() * 0.4,
+        max: 0.9,
+        color,
+        size: 1.4 + this.rnd() * 2 * power,
+      });
+    }
+  }
+
+  private addFloater(x: number, y: number, text: string, color: string, big = false) {
+    this.floaters.push({ x, y, life: big ? 1.4 : 1.0, text, color, big });
+  }
+
+  /** Start a feeding frenzy: a burst of winnings-rich fish and a banner. */
+  private startFrenzy() {
+    this.frenzyActive = 12;
+    this.frenzyTimer = 55 + this.rnd() * 30;
+    this.frenzyBannerT = 2.6;
+    this.sound.frenzy();
+    for (let i = 0; i < 10; i++) {
+      this.spawnFish();
+      const f = this.fish[this.fish.length - 1];
+      if (f && !f.isPlayer) f.winnings = Math.round(f.value * (0.3 + this.rnd() * 0.5));
+    }
+  }
+
+  /** Mark a random winnings-carrying fish as the bounty (bonus reward + glow). */
+  private assignBounty() {
+    this.bountyTimer = 10 + this.rnd() * 8;
+    const options = this.fish.filter((f) => !f.isPlayer && !f.dead && f.winnings > 5);
+    this.bountyFish = options.length ? options[Math.floor(this.rnd() * options.length)] : null;
   }
 
   private update(dt: number) {
@@ -384,6 +504,56 @@ export class ArenaGame {
         b.x = this.rnd() * this.W;
       }
     }
+    // Snails crawl the seabed; the turtle drifts across.
+    for (const s of this.snails) {
+      s.x += s.dir * 7 * dt;
+      if (s.x < -12) s.x = this.W + 12;
+      if (s.x > this.W + 12) s.x = -12;
+    }
+    for (const c of this.critters) {
+      c.phase += dt;
+      if (c.kind === "turtle") {
+        c.x += c.vx * dt;
+        if (c.x > this.W + 80) c.x = -80;
+      }
+    }
+
+    // --- feel timers ---
+    this.shake = Math.max(0, this.shake - dt * 16);
+    if (this.dashCd > 0) this.dashCd = Math.max(0, this.dashCd - dt);
+    if (this.dashTime > 0) this.dashTime = Math.max(0, this.dashTime - dt);
+    if (this.biteFxCd > 0) this.biteFxCd = Math.max(0, this.biteFxCd - dt);
+    if (this.frenzyBannerT > 0) this.frenzyBannerT = Math.max(0, this.frenzyBannerT - dt);
+    if (this.comboTimer > 0) {
+      this.comboTimer -= dt;
+      if (this.comboTimer <= 0) this.combo = 0;
+    }
+
+    // particles + floating numbers
+    for (const pt of this.particles) {
+      pt.x += pt.vx * dt;
+      pt.y += pt.vy * dt;
+      pt.vy += 30 * dt;
+      pt.life -= dt;
+    }
+    if (this.particles.length) this.particles = this.particles.filter((pt) => pt.life > 0);
+    for (const fl of this.floaters) {
+      fl.y -= 26 * dt;
+      fl.life -= dt;
+    }
+    if (this.floaters.length) this.floaters = this.floaters.filter((fl) => fl.life > 0);
+
+    // feeding frenzy events
+    if (this.frenzyActive > 0) {
+      this.frenzyActive -= dt;
+    } else {
+      this.frenzyTimer -= dt;
+      if (this.frenzyTimer <= 0) this.startFrenzy();
+    }
+
+    // keep a bounty fish assigned
+    this.bountyTimer -= dt;
+    if (this.bountyTimer <= 0 || !this.bountyFish || this.bountyFish.dead) this.assignBounty();
 
     // ---- Player steering ----
     if (!p.dead) {
@@ -399,7 +569,12 @@ export class ArenaGame {
       }
       const len = Math.hypot(dx, dy);
       // Smaller fish are faster & nimbler - the skill edge for the little guy.
-      const speed = clamp(360 * Math.pow(radiusFor(50) / p.radius, 0.35), 120, 380);
+      // The deeper you go, the heavier the water: movement slows toward the deep,
+      // so escaping a whale down there is genuinely harder.
+      const depthT = clamp((p.y - this.surfaceY) / (this.worldH - this.surfaceY), 0, 1);
+      const depthMult = 1 - depthT * 0.45; // full speed at surface, ~55% in the deep
+      const dashMult = this.dashTime > 0 ? DASH_SPEED : 1;
+      const speed = clamp(360 * Math.pow(radiusFor(50) / p.radius, 0.35), 120, 380) * depthMult * dashMult;
       if (len > 0.001) {
         const ax = (dx / len) * speed;
         const ay = (dy / len) * speed;
@@ -447,9 +622,9 @@ export class ArenaGame {
     // Keep the ocean populated.
     this.spawnTimer -= dt;
     const bots = this.fish.filter((f) => !f.isPlayer && !f.dead).length;
-    if (this.spawnTimer <= 0 && bots < 30) {
+    if (this.spawnTimer <= 0 && bots < 38) {
       this.spawnFish();
-      this.spawnTimer = 0.8;
+      this.spawnTimer = 0.7;
     }
     this.fish = this.fish.filter((f) => !f.dead || f.isPlayer);
 
@@ -543,6 +718,14 @@ export class ArenaGame {
         f.radius = radiusFor(f.value);
         this.tookDamage = true; // being bitten blocks HP regen
       }
+      if (this.biteFxCd <= 0 && (pBite > 0 || fBite > 0)) {
+        this.biteFxCd = 0.1;
+        if (pBite > 0) this.spawnBurst((p.x + f.x) / 2, (p.y + f.y) / 2, 2, "rgba(146,200,175,0.8)");
+        if (fBite > 0) {
+          this.spawnBurst(p.x, p.y, 3, "rgba(214,90,66,0.85)");
+          this.shake = Math.min(1.2, this.shake + 0.22);
+        }
+      }
       this.syncPlayerSize();
 
       if (f.hp <= 0) {
@@ -558,14 +741,45 @@ export class ArenaGame {
 
   private playerEats(f: Fish) {
     f.dead = true;
-    const gain = f.winnings; // you take its winnings (CHUM); its deposit is untouched
+    const isBounty = f === this.bountyFish;
+    const bigFish = tierFor(f.value) >= 5;
+    let gain = f.winnings; // you take its winnings (CHUM); its deposit is untouched
     this.player.biteFlash = 1;
+    this.sound.chomp();
+
+    // combo: chain eats within the window for a multiplier
+    this.combo = this.comboTimer > 0 ? this.combo + 1 : 1;
+    this.comboTimer = COMBO_WINDOW;
+    const comboMult = 1 + Math.min(this.combo - 1, 5) * 0.1; // up to +50%
+
     if (gain > 0) {
+      if (isBounty) gain *= BOUNTY_BONUS;
+      gain = Math.round(gain * comboMult);
       this.carried += gain;
       this.syncPlayerSize();
-      this.setMsg(`Ate a ${tierNameOf(f.value)} - +${fmt(gain)} CHUM won. Surface to secure it.`);
+      this.spawnBurst(f.x, f.y, isBounty || bigFish ? 24 : 12, "rgba(146,200,175,0.95)", bigFish ? 1.7 : 1);
+      this.addFloater(
+        f.x,
+        f.y - f.radius,
+        `+${fmt(gain)}${this.combo > 1 ? ` x${this.combo}` : ""}`,
+        isBounty ? "#C9A24A" : "#7FB39B",
+        bigFish || isBounty,
+      );
+      this.shake = Math.min(1.4, this.shake + (bigFish ? 1.1 : 0.4) + (isBounty ? 0.5 : 0));
+      if (isBounty) {
+        this.bountyFish = null;
+        this.sound.bigWin();
+        this.setMsg(`Bounty down. +${fmt(gain)} CHUM.`);
+      } else if (bigFish) {
+        this.sound.bigWin();
+        this.setMsg(`Took down a ${tierNameOf(f.value)}. +${fmt(gain)} CHUM.`);
+      } else {
+        this.sound.win();
+        this.setMsg(`+${fmt(gain)} CHUM${this.combo > 1 ? ` (x${this.combo} combo)` : ""}. Surface to secure.`);
+      }
     } else {
-      this.setMsg(`Ate a ${tierNameOf(f.value)} - it carried no winnings.`);
+      this.spawnBurst(f.x, f.y, 6, "rgba(255,255,255,0.5)");
+      this.setMsg(`Ate a ${tierNameOf(f.value)}. No winnings.`);
     }
   }
 
@@ -577,7 +791,9 @@ export class ArenaGame {
     this.deposit += amt;
     this.carried = 0;
     this.syncPlayerSize();
-    this.setMsg(`Secured ${fmt(amt)} CHUM into your deposit - safe for good. Dive for more.`);
+    this.sound.secure();
+    this.addFloater(this.player.x, this.player.y - this.player.radius, `Secured ${fmt(amt)}`, "#5FA383", true);
+    this.setMsg(`Secured ${fmt(amt)} CHUM into your deposit. Safe for good. Dive for more.`);
   }
 
   /** Cash out from the deposit to the wallet (used by the dashboard). Keeps a Spawn seed. */
@@ -610,6 +826,12 @@ export class ArenaGame {
     p.hp = MAX_HP * 0.6;
     this.playerGuard = TAKEDOWN_IMMUNITY;
     this.takedownFlash = 1;
+    this.spawnBurst(p.x, p.y, 20, "rgba(214,90,66,0.9)", 1.5);
+    if (taken > 0.5) this.addFloater(p.x, p.y - p.radius, `-${fmt(taken)}`, "#D65A42", true);
+    this.shake = Math.min(1.9, this.shake + 1.4);
+    this.sound.hurt();
+    this.combo = 0;
+    this.comboTimer = 0;
     this.syncPlayerSize();
 
     const pred = tierNameOf(by.value);
@@ -736,6 +958,11 @@ export class ArenaGame {
       message: this.message,
       fishAlive: this.fish.filter((f) => !f.isPlayer && !f.dead).length,
       threat: this.computeThreat(),
+      combo: this.comboTimer > 0 ? this.combo : 0,
+      dashReady: clamp(1 - this.dashCd / DASH_COOLDOWN, 0, 1),
+      frenzy: this.frenzyActive > 0,
+      frenzyBanner: this.frenzyBannerT > 0,
+      muted: this.sound.muted,
     };
   }
 
@@ -751,14 +978,22 @@ export class ArenaGame {
     const ctx = this.ctx;
     const cam = this.cameraY;
 
-    // Water: depth gradient (pale surface -> deep ocean ink).
+    // Screen shake: nudge the whole scene by a small random offset.
+    ctx.save();
+    if (this.shake > 0.01) {
+      const s = this.shake * 8;
+      ctx.translate((this.rnd() - 0.5) * s, (this.rnd() - 0.5) * s);
+    }
+
+    // Water: depth gradient (pale surface -> deep ocean ink). Slightly over-drawn so
+    // the shake offset never reveals an edge.
     const g = ctx.createLinearGradient(0, 0, 0, this.H);
     const topShade = shadeAtDepth(cam);
     const botShade = shadeAtDepth(cam + this.H);
     g.addColorStop(0, topShade);
     g.addColorStop(1, botShade);
     ctx.fillStyle = g;
-    ctx.fillRect(0, 0, this.W, this.H);
+    ctx.fillRect(-14, -14, this.W + 28, this.H + 28);
 
     // Sunlight god-rays from the surface - soft, slowly drifting, fading with depth.
     const surfaceOnScreen = this.surfaceY - cam;
@@ -784,6 +1019,9 @@ export class ArenaGame {
       }
       ctx.restore();
     }
+
+    // Seabed, plants, and ambient creatures (behind the fish).
+    this.drawDecor(cam);
 
     // Six tier bands (Spawn near the surface -> Leviathan in the deep). This is the
     // map: the player reads depth to decide whether to rise (safer) or dive
@@ -887,6 +1125,171 @@ export class ArenaGame {
       ctx.stroke();
       ctx.restore();
     }
+
+    // Particles
+    for (const pt of this.particles) {
+      const sy = pt.y - cam;
+      if (sy < -20 || sy > this.H + 20) continue;
+      ctx.globalAlpha = clamp(pt.life / pt.max, 0, 1);
+      ctx.fillStyle = pt.color;
+      ctx.fillRect(pt.x - pt.size / 2, sy - pt.size / 2, pt.size, pt.size);
+    }
+    ctx.globalAlpha = 1;
+
+    // Floating numbers
+    for (const fl of this.floaters) {
+      const sy = fl.y - cam;
+      if (sy < -20 || sy > this.H + 20) continue;
+      ctx.globalAlpha = clamp(fl.life, 0, 1);
+      ctx.font = `600 ${fl.big ? 15 : 12}px ui-monospace, 'IBM Plex Mono', monospace`;
+      ctx.textAlign = "center";
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = "rgba(6,20,32,0.6)";
+      ctx.strokeText(fl.text, fl.x, sy);
+      ctx.fillStyle = fl.color;
+      ctx.fillText(fl.text, fl.x, sy);
+    }
+    ctx.globalAlpha = 1;
+
+    // Feeding-frenzy warm tint over the whole scene while active.
+    if (this.frenzyActive > 0) {
+      ctx.fillStyle = `rgba(198,169,120,${0.06 + 0.04 * Math.sin(this.t * 6)})`;
+      ctx.fillRect(-14, -14, this.W + 28, this.H + 28);
+    }
+
+    ctx.restore(); // end screen shake
+  }
+
+  private drawDecor(cam: number) {
+    const ctx = this.ctx;
+    const bedSy = this.seabedY - cam;
+
+    // Seabed
+    if (bedSy < this.H) {
+      const top = Math.max(0, bedSy);
+      ctx.fillStyle = "#0a2233";
+      ctx.fillRect(0, top, this.W, this.H - top + 2);
+      if (bedSy > -4 && bedSy < this.H) {
+        ctx.fillStyle = "rgba(200,185,137,0.10)";
+        ctx.fillRect(0, bedSy, this.W, 3);
+      }
+    }
+
+    // Seaweed (swaying kelp)
+    const palettes = [
+      ["#3a5c4e", "#4E7367"],
+      ["#38564C", "#4a6b5c"],
+      ["#455f3f", "#57785a"],
+    ];
+    for (const w of this.seaweed) {
+      const cols = palettes[Math.floor(w.hue * 3) % 3];
+      for (let bl = 0; bl < w.blades; bl++) {
+        const bx0 = w.x + (bl - (w.blades - 1) / 2) * 4;
+        for (let seg = 0; seg < w.h; seg += 4) {
+          const sy = this.seabedY - seg - cam;
+          if (sy < -8 || sy > this.H + 8) continue;
+          const sway = Math.sin(this.t * 1.1 + w.phase + seg * 0.06) * (seg / w.h) * 9;
+          ctx.fillStyle = seg % 8 === 0 ? cols[0] : cols[1];
+          ctx.fillRect(Math.round(bx0 + sway), Math.round(sy), 4, 4);
+        }
+      }
+    }
+
+    // Snails on the seabed
+    for (const s of this.snails) {
+      const sy = bedSy - 5;
+      if (sy < -10 || sy > this.H + 10) continue;
+      ctx.save();
+      ctx.translate(Math.round(s.x), Math.round(sy));
+      if (s.dir < 0) ctx.scale(-1, 1);
+      ctx.fillStyle = "#8C7F63";
+      ctx.fillRect(-5, 3, 9, 3);
+      ctx.fillRect(4, 0, 2, 4);
+      ctx.fillStyle = "#665C46";
+      ctx.beginPath();
+      ctx.arc(-1, 0, 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#CBC2A6";
+      ctx.beginPath();
+      ctx.arc(-1, 0, 2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    for (const c of this.critters) {
+      if (c.kind === "octopus") this.drawOctopus(c, cam);
+      else this.drawTurtle(c, cam);
+    }
+  }
+
+  private drawOctopus(c: { x: number; y: number }, cam: number) {
+    const ctx = this.ctx;
+    const sy = c.y - cam;
+    if (sy < -30 || sy > this.H + 30) return;
+    ctx.fillStyle = "#5C3A50";
+    for (let i = 0; i < 6; i++) {
+      const tx = c.x - 12 + i * 5;
+      for (let seg = 0; seg < 12; seg += 3) {
+        const wave = Math.sin(this.t * 2 + i + seg * 0.4) * 2.5;
+        ctx.fillRect(Math.round(tx + wave), Math.round(sy + 6 + seg), 3, 3);
+      }
+    }
+    ctx.fillStyle = "#7A4E6B";
+    ctx.beginPath();
+    ctx.ellipse(c.x, sy, 12, 10, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#F7F8F6";
+    ctx.beginPath();
+    ctx.arc(c.x - 4, sy - 1, 2.4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(c.x + 4, sy - 1, 2.4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#10222E";
+    ctx.beginPath();
+    ctx.arc(c.x - 4, sy - 1, 1, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(c.x + 4, sy - 1, 1, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  private drawTurtle(c: { x: number; y: number; vx: number; phase: number }, cam: number) {
+    const ctx = this.ctx;
+    const bob = Math.sin(this.t * 0.6 + c.phase) * 5;
+    const sy = c.y - cam + bob;
+    if (sy < -30 || sy > this.H + 30) return;
+    ctx.save();
+    ctx.translate(c.x, sy);
+    if (c.vx < 0) ctx.scale(-1, 1);
+    const flap = Math.sin(c.phase * 3) * 3;
+    ctx.fillStyle = "#6B7D52";
+    ctx.beginPath();
+    ctx.ellipse(-6, -6 + flap, 6, 3, -0.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(-6, 6 - flap, 6, 3, 0.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(8, 5 - flap, 5, 2.6, 0.6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(13, -1, 4, 3.2, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#10222E";
+    ctx.beginPath();
+    ctx.arc(15, -2, 0.9, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#4E6B3A";
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 13, 9, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#38502a";
+    ctx.fillRect(-2, -4, 4, 4);
+    ctx.fillRect(-8, -1, 4, 3);
+    ctx.fillRect(4, -1, 4, 3);
+    ctx.fillRect(-2, 2, 4, 4);
+    ctx.restore();
   }
 
   private drawFish(f: Fish, cam: number) {
@@ -972,6 +1375,22 @@ export class ArenaGame {
       ctx.fillRect(bx - 1, by - 1, bw + 2, 5);
       ctx.fillStyle = frac > 0.5 ? "#5FA383" : frac > 0.25 ? "#C9A24A" : "#D65A42";
       ctx.fillRect(bx, by, bw * frac, 3);
+      ctx.restore();
+    }
+
+    // Bounty highlight: a pulsing gold ring and label on the marked fish.
+    if (f === this.bountyFish && !f.dead) {
+      const pulse = 0.55 + 0.45 * Math.sin(this.t * 6);
+      ctx.save();
+      ctx.strokeStyle = `rgba(200,162,74,${pulse})`;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.ellipse(f.x, sy + bob, w * 0.72, h * 0.82, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = "#C9A24A";
+      ctx.font = "600 10px ui-monospace, 'IBM Plex Mono', monospace";
+      ctx.textAlign = "center";
+      ctx.fillText("BOUNTY", f.x, sy - h * 0.6 - 16);
       ctx.restore();
     }
 

@@ -28,6 +28,15 @@ export default function Dashboard() {
   const [burned, setBurned] = useState(128000);
   const [pool, setPool] = useState(4200);
   const [taken, setTaken] = useState(0);
+  const [dailyClaimed, setDailyClaimed] = useState(false);
+  const [streak, setStreak] = useState(4);
+
+  const claimDaily = () => {
+    if (dailyClaimed) return;
+    setDailyClaimed(true);
+    setStreak((s) => s + 1);
+    setWallet((w) => w + 250);
+  };
 
   const tier = tierFor(staked);
   const tierName = TIER_NAMES[tier - 1];
@@ -154,12 +163,16 @@ export default function Dashboard() {
         <section className="flex flex-col gap-3 rounded-xl border border-hairline bg-porcelain p-5">
           <span className="font-mono text-[11px] uppercase tracking-wide text-tide">$CHUM economy</span>
           <StatRow label="Total burned" value={fmt(burned)} tone="coral" />
-          <StatRow label="Weekly leaderboard pool" value={fmt(pool)} tone="gold" />
+          <StatRow label="Weekly prize pool" value={fmt(pool)} tone="gold" />
+          <StatRow label="Reserve" value="182,400" tone="kelp" />
           <StatRow label="You've taken home" value={fmt(taken)} tone="kelp" />
-          <p className="mt-1 font-mono text-[11px] leading-relaxed text-tide">
-            Every upgrade burns 90% of the $CHUM spent and sends 10% to the weekly pool, paid out to the
-            top fish on the leaderboard.
-          </p>
+          <div className="mt-1 border-t border-hairline pt-3">
+            <div className="font-mono text-[10px] uppercase tracking-wide text-tide">Prize pool funded by</div>
+            <p className="mt-1 font-mono text-[11px] leading-relaxed text-tide">
+              Cosmetics, tournament entries, and a reserve saved in busy weeks. Not by anyone&apos;s
+              deposit. Upgrades also burn 90% and route 10% here.
+            </p>
+          </div>
         </section>
 
         <section className="flex flex-col gap-3 rounded-xl border border-hairline bg-porcelain p-5 lg:col-span-2">
@@ -201,6 +214,106 @@ export default function Dashboard() {
         </section>
       </div>
 
+      {/* Season + daily reward */}
+      <div className="grid gap-5 lg:grid-cols-3">
+        <section className="flex flex-col gap-3 rounded-xl border border-hairline bg-porcelain p-5 lg:col-span-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="font-mono text-[11px] uppercase tracking-wide text-tide">Season 3 · Deep Currents</span>
+            <span className="font-mono text-[11px] text-tide">ends in 4d 9h</span>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <MiniStat label="Your rank" value="#4" sub="of 2,143" />
+            <MiniStat label="Prize pool" value={`${fmt(pool)}`} sub="CHUM" />
+            <MiniStat label="Top 100 paid" value="Yes" sub="you qualify" />
+          </div>
+          <p className="font-mono text-[11px] leading-relaxed text-tide">
+            Seasons reset the leaderboard and pay out the prize pool. Finish high to earn, then start the
+            next season with your rank and badges intact.
+          </p>
+        </section>
+
+        <section className="flex flex-col gap-3 rounded-xl border border-hairline bg-porcelain p-5">
+          <span className="font-mono text-[11px] uppercase tracking-wide text-tide">Daily reward</span>
+          <div className="flex items-baseline gap-2">
+            <span className="font-mono text-2xl text-kelp">+250</span>
+            <span className="font-mono text-xs text-tide">CHUM</span>
+          </div>
+          <div className="font-mono text-[11px] text-tide">{streak} day streak</div>
+          <button
+            type="button"
+            onClick={claimDaily}
+            disabled={dailyClaimed}
+            className="mt-1 rounded-md bg-depth px-4 py-2 font-mono text-sm text-porcelain outline-none transition-colors hover:bg-depth/90 focus-visible:ring-2 focus-visible:ring-depth focus-visible:ring-offset-2 focus-visible:ring-offset-porcelain disabled:cursor-default disabled:bg-hairline disabled:text-tide"
+          >
+            {dailyClaimed ? "Claimed today" : "Claim"}
+          </button>
+        </section>
+      </div>
+
+      {/* Progression + pack */}
+      <div className="grid gap-5 lg:grid-cols-2">
+        <section className="flex flex-col gap-4 rounded-xl border border-hairline bg-porcelain p-5">
+          <div className="flex items-center justify-between">
+            <span className="font-mono text-[11px] uppercase tracking-wide text-tide">Progression</span>
+            <span className="rounded-full border border-gold/50 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wide text-gold">
+              Rank: Reaver
+            </span>
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            <MiniStat label="Meals" value="1,204" sub="all time" />
+            <MiniStat label="Best combo" value="x9" sub="chain" />
+            <MiniStat label="Survived" value="38" sub="takedowns" />
+          </div>
+          <div>
+            <div className="mb-2 font-mono text-[10px] uppercase tracking-wide text-tide">Badges</div>
+            <div className="flex flex-wrap gap-2">
+              {["Whale Slayer", "Bounty Hunter", "7 Day Streak", "Frenzy Feeder"].map((b) => (
+                <span key={b} className="rounded-full border border-hairline px-2.5 py-1 font-mono text-[10px] text-ink">
+                  {b}
+                </span>
+              ))}
+              <span className="rounded-full border border-dashed border-hairline px-2.5 py-1 font-mono text-[10px] text-tide/60">
+                Season 3 champ · locked
+              </span>
+            </div>
+          </div>
+        </section>
+
+        <section className="flex flex-col gap-4 rounded-xl border border-hairline bg-porcelain p-5">
+          <div className="flex items-center justify-between">
+            <span className="font-mono text-[11px] uppercase tracking-wide text-tide">Your pack</span>
+            <span className="font-mono text-[11px] text-tide">Pack rank #6</span>
+          </div>
+          <div className="font-display text-base text-ink">Saltwater Syndicate</div>
+          <div className="flex -space-x-1">
+            {[1, 2, 3, 4, 5].map((i) => (
+              <span key={i} className="flex h-8 w-8 items-center justify-center rounded-full border border-hairline bg-porcelain-deep/50">
+                <PixelFish tier={((i * 2) % 6) + 1} seed={i * 5} size={18} />
+              </span>
+            ))}
+            <span className="flex h-8 w-8 items-center justify-center rounded-full border border-hairline bg-porcelain-deep/50 font-mono text-[10px] text-tide">
+              +7
+            </span>
+          </div>
+          <p className="font-mono text-[11px] leading-relaxed text-tide">
+            Packs hunt together, climb a shared leaderboard, and split a pack prize each season. Invite a
+            friend and you both earn 500 CHUM when they claim their fish.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                if (typeof navigator !== "undefined" && navigator.clipboard) {
+                  void navigator.clipboard.writeText("https://feedingfrenzy.gg/join/1337");
+                }
+              }}
+              className="rounded-md border border-depth/50 px-3 py-1.5 font-mono text-[11px] text-depth outline-none transition-colors hover:bg-depth/10 focus-visible:ring-2 focus-visible:ring-depth"
+            >
+              Copy invite link
+            </button>
+          </div>
+        </section>
+      </div>
     </div>
   );
 }
